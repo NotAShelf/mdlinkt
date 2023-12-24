@@ -20,7 +20,7 @@ type LinkCheckResult struct {
 }
 
 func logWithColor(level string, msg string, args ...interface{}) {
-	timestamp := time.Now().Format("2006/01/02 15:04:05") // TODO: use time.RFC3339?
+	timestamp := time.Now().Format("2006/01/02 15:04:05")
 	colorFunc := color.New(color.FgWhite).SprintFunc()
 	switch level {
 	case "ERROR":
@@ -49,9 +49,17 @@ func main() {
 		logWithColor("ERROR", "Failed to open file: %v", err)
 		os.Exit(1)
 	}
+	if file == nil {
+		logWithColor("ERROR", "File is nil")
+		os.Exit(1)
+	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	if scanner == nil {
+		logWithColor("ERROR", "Scanner is nil")
+		os.Exit(1)
+	}
 	re := regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 
 	results := []LinkCheckResult{}
@@ -62,22 +70,28 @@ func main() {
 		for _, match := range matches {
 			link := strings.TrimSpace(match[2])
 			resp, err := http.Head(link)
-			if err != nil {
+			if err != nil || resp == nil {
 				logWithColor("ERROR", "Invalid link: %s", link)
-				continue
-			}
-			result := LinkCheckResult{
-				Link:       link,
-				IsValid:    resp.StatusCode == http.StatusOK,
-				StatusCode: resp.StatusCode,
-			}
-			results = append(results, result)
-			if *verbose || (!*failedOnly && !result.IsValid) {
-				statusColor := color.GreenString
-				if !result.IsValid {
-					statusColor = color.RedString
+				results = append(results, LinkCheckResult{
+					Link:       link,
+					IsValid:    false,
+					StatusCode: http.StatusBadRequest,
+				})
+			} else {
+				isValid := resp.StatusCode == http.StatusOK
+				result := LinkCheckResult{
+					Link:       link,
+					IsValid:    isValid,
+					StatusCode: resp.StatusCode,
 				}
-				logWithColor("INFO", "%s: %s", link, statusColor("%d", result.StatusCode))
+				results = append(results, result)
+				if *verbose || (!*failedOnly && !isValid) {
+					statusColor := color.GreenString
+					if !isValid {
+						statusColor = color.RedString
+					}
+					logWithColor("INFO", "%s: %s", link, statusColor("%d", resp.StatusCode))
+				}
 			}
 		}
 	}
@@ -97,18 +111,18 @@ func main() {
 			invalidCount++
 		}
 	}
+	summaryColor := color.GreenString
+	if invalidCount > 0 {
+		summaryColor = color.RedString
+	}
+	logWithColor("INFO", summaryColor("Summary: %d valid links, %d invalid links"), validCount, invalidCount)
+
 	if *failedOnly {
 		for _, result := range results {
 			if !result.IsValid {
 				logWithColor("ERROR", "Failed link: %s", result.Link)
 			}
 		}
-	} else {
-		summaryColor := color.GreenString
-		if invalidCount > 0 {
-			summaryColor = color.RedString
-		}
-		logWithColor("INFO", summaryColor("Summary: %d valid links, %d invalid links"), validCount, invalidCount)
 	}
 
 	if invalidCount > 0 {
