@@ -3,19 +3,34 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
-	"log/slog"
 )
 
 type LinkCheckResult struct {
 	Link       string
 	IsValid    bool
 	StatusCode int
+}
+
+func logWithColor(level string, msg string, args ...interface{}) {
+	timestamp := time.Now().Format("2006/01/02 15:04:05")
+	colorFunc := color.New(color.FgWhite).SprintFunc()
+	switch level {
+	case "ERROR":
+		colorFunc = color.New(color.FgRed).SprintFunc()
+	case "WARN":
+		colorFunc = color.New(color.FgYellow).SprintFunc()
+	case "INFO":
+		colorFunc = color.New(color.FgCyan).SprintFunc()
+	}
+	fmt.Printf("%s %s %s\n", timestamp, colorFunc(level), fmt.Sprintf(msg, args...))
 }
 
 func main() {
@@ -25,13 +40,13 @@ func main() {
 	flag.Parse()
 
 	if *filename == "" {
-		slog.Error("Please provide a markdown file.")
+		logWithColor("INFO", "Please provide a markdown file.")
 		os.Exit(1)
 	}
 
 	file, err := os.Open(*filename)
 	if err != nil {
-		slog.Error("Failed to open file: ", err)
+		logWithColor("ERROR", "Failed to open file: %v", err)
 		os.Exit(1)
 	}
 	defer file.Close()
@@ -47,8 +62,9 @@ func main() {
 		for _, match := range matches {
 			link := strings.TrimSpace(match[2])
 			resp, err := http.Head(link)
-			if err != nil {
-				slog.Error("Error checking link: ", err)
+			isInvalid := err != nil || resp.StatusCode == http.StatusNotFound || strings.Contains(err.Error(), "no such host")
+			if isInvalid {
+				logWithColor("ERROR", "Invalid link: %s", link)
 			} else {
 				result := LinkCheckResult{
 					Link:       link,
@@ -61,14 +77,14 @@ func main() {
 					if !result.IsValid {
 						statusColor = color.RedString
 					}
-					slog.Info(link + ": " + statusColor("%d", result.StatusCode))
+					logWithColor("INFO", "%s: %s", link, statusColor("%d", result.StatusCode))
 				}
 			}
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		slog.Info("Error scanning file: ", err)
+		logWithColor("ERROR", "Error scanning file: %v", err)
 		os.Exit(1)
 	}
 
@@ -85,7 +101,7 @@ func main() {
 	if *failedOnly {
 		for _, result := range results {
 			if !result.IsValid {
-				slog.Info("Failed link: " + result.Link)
+				logWithColor("ERROR", "Failed link: %s", result.Link)
 			}
 		}
 	} else {
@@ -93,7 +109,7 @@ func main() {
 		if invalidCount > 0 {
 			summaryColor = color.RedString
 		}
-		slog.Info(summaryColor("Summary: %d valid links, %d invalid links", validCount, invalidCount))
+		logWithColor("INFO", summaryColor("Summary: %d valid links, %d invalid links"), validCount, invalidCount)
 	}
 
 	if invalidCount > 0 {
