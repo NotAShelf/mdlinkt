@@ -1,8 +1,6 @@
 {
   description = "mdlinkt: detect broken links in markdown files";
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs";
 
   outputs = {
     self,
@@ -12,15 +10,14 @@
     forEachSystem = nixpkgs.lib.genAttrs systems;
 
     pkgsForEach = nixpkgs.legacyPackages;
-  in rec {
+  in {
     packages = forEachSystem (system: {
-      default = pkgsForEach.${system}.callPackage ./nix/package.nix {};
+      default = self.packages.${system}.mdlinkt;
+      mdlinkt = pkgsForEach.${system}.callPackage ./nix/package.nix {};
     });
 
     devShells = forEachSystem (system: {
       default = pkgsForEach.${system}.callPackage ./nix/shell.nix {};
     });
-
-    hydraJobs = packages;
   };
 }

@@ -20,7 +20,7 @@ type LinkCheckResult struct {
 }
 
 func logWithColor(level string, msg string, args ...interface{}) {
-	timestamp := time.Now().Format("2006/01/02 15:04:05")
+	timestamp := time.Now().Format("2006/01/02 15:04:05") // TODO: use time.RFC3339?
 	colorFunc := color.New(color.FgWhite).SprintFunc()
 	switch level {
 	case "ERROR":
