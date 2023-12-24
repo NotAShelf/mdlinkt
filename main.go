@@ -62,23 +62,22 @@ func main() {
 		for _, match := range matches {
 			link := strings.TrimSpace(match[2])
 			resp, err := http.Head(link)
-			isInvalid := err != nil || resp.StatusCode == http.StatusNotFound || strings.Contains(err.Error(), "no such host")
-			if isInvalid {
+			if err != nil {
 				logWithColor("ERROR", "Invalid link: %s", link)
-			} else {
-				result := LinkCheckResult{
-					Link:       link,
-					IsValid:    resp.StatusCode == http.StatusOK,
-					StatusCode: resp.StatusCode,
+				continue
+			}
+			result := LinkCheckResult{
+				Link:       link,
+				IsValid:    resp.StatusCode == http.StatusOK,
+				StatusCode: resp.StatusCode,
+			}
+			results = append(results, result)
+			if *verbose || (!*failedOnly && !result.IsValid) {
+				statusColor := color.GreenString
+				if !result.IsValid {
+					statusColor = color.RedString
 				}
-				results = append(results, result)
-				if *verbose || (!*failedOnly && !result.IsValid) {
-					statusColor := color.GreenString
-					if !result.IsValid {
-						statusColor = color.RedString
-					}
-					logWithColor("INFO", "%s: %s", link, statusColor("%d", result.StatusCode))
-				}
+				logWithColor("INFO", "%s: %s", link, statusColor("%d", result.StatusCode))
 			}
 		}
 	}
