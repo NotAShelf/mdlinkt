@@ -29,6 +29,16 @@ Should you want more details on the links that are scanned, you may pass the `-v
 In case of invalid links, the program will exit with exit code 1, making it perfect for usage in
 GitHub actions or other pipelines.
 
+### Performance
+
+For a file containing **10,000 invalid links**, the **Hyperfine** benchmark is as follows.
+
+| Command                           |    Mean [ms] | Min [ms] | Max [ms] | Relative |
+| :-------------------------------- | -----------: | -------: | -------: | -------: |
+| `mdlinkt -verbose -file links.md` | 822.2 ± 22.6 |    787.4 |    959.8 |     1.00 |
+
+The test has been conducted on a **Ryzen 5 3600X**, at a **95 ± 5 MB/s** bandwitdh speed.
+
 ## Hacking
 
 A nix flake is provided. Use `direnv allow` or `nix develop` to enter the development shell.
