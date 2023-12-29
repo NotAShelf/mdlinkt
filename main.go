@@ -39,6 +39,38 @@ func logWithColor(level string, msg string, args ...interface{}) {
 	}
 }
 
+func worker(jobs <-chan string, results chan<- LinkCheckResult, verboseFlag *bool, failedOnly *bool) {
+	for link := range jobs {
+		resp, err := http.Head(link)
+		if err != nil {
+			if *verboseFlag {
+				logWithColor("ERROR", "Invalid link: %s", link)
+			}
+			results <- LinkCheckResult{
+				Link:       link,
+				IsValid:    false,
+				StatusCode: http.StatusBadRequest,
+			}
+		} else {
+			isValid := resp.StatusCode == http.StatusOK
+			result := LinkCheckResult{
+				Link:       link,
+				IsValid:    isValid,
+				StatusCode: resp.StatusCode,
+			}
+			results <- result
+			if *verboseFlag || (!*failedOnly && !isValid) {
+				statusColor := color.GreenString
+				if !isValid {
+					statusColor = color.RedString
+				}
+				logWithColor("INFO", "%s: %s", link, statusColor("%d", resp.StatusCode))
+			}
+		}
+		wg.Done()
+	}
+}
+
 func main() {
 	filename := flag.String("file", "", "Markdown file to test")
 	verboseFlag := flag.Bool("verbose", false, "Enable verbose mode")
@@ -70,90 +102,52 @@ func main() {
 	}
 	re := regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 
-	results := []LinkCheckResult{}
-	resChan := make(chan LinkCheckResult, 1000) // buffered channel for storing responses
+	jobs := make(chan string, 10000)
+	results := make(chan LinkCheckResult, 10000)
+
+	// Start workers
+	for i := 1; i <= 10; i++ {
+		go worker(jobs, results, verboseFlag, failedOnly)
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		matches := re.FindAllStringSubmatch(line, -1)
 		for _, match := range matches {
 			wg.Add(1)
-			go func(link string, verboseFlag *bool) {
-				defer wg.Done()
-				resp, err := http.Head(link)
-				if err != nil || resp == nil {
-					logWithColor("ERROR", "Invalid link: %s", link)
-					resChan <- LinkCheckResult{
-						Link:       link,
-						IsValid:    false,
-						StatusCode: http.StatusBadRequest,
-					}
-				} else {
-					isValid := resp.StatusCode == http.StatusOK
-					result := LinkCheckResult{
-						Link:       link,
-						IsValid:    isValid,
-						StatusCode: resp.StatusCode,
-					}
-					resChan <- result
-					if *verboseFlag || (!*failedOnly && !isValid) {
-						statusColor := color.GreenString
-						if !isValid {
-							statusColor = color.RedString
-						}
-						logWithColor("INFO", "%s: %s", link, statusColor("%d", resp.StatusCode))
-					}
-				}
-			}(strings.TrimSpace(match[2]), verboseFlag)
+			jobs <- strings.TrimSpace(match[2])
 		}
 	}
+	close(jobs)
 
-	wg.Wait()
-	close(resChan)
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
 
-	for res := range resChan {
-		results = append(results, res)
+	var invalidCount int
+
+	for res := range results {
+		if *failedOnly && res.IsValid {
+			continue
+		}
+		if *verboseFlag || (!*failedOnly && !res.IsValid) {
+			if res.IsValid {
+				logWithColor("INFO", "Link %s is valid with status code %d", res.Link, res.StatusCode)
+			} else {
+				logWithColor("ERROR", "Link %s is invalid with status code %d", res.Link, res.StatusCode)
+				invalidCount++
+			}
+		}
+		wg.Done()
+	}
+
+	if invalidCount > 0 {
+		os.Exit(1)
 	}
 
 	if err := scanner.Err(); err != nil {
 		logWithColor("ERROR", "Error scanning file: %v", err)
-		os.Exit(1)
-	}
-
-	// summary
-	validCount := 0
-	invalidCount := 0
-	for _, result := range results {
-		if result.IsValid {
-			validCount++
-		} else {
-			invalidCount++
-		}
-	}
-	summaryColor := color.GreenString
-	if invalidCount > 0 {
-		summaryColor = color.RedString
-	}
-
-	logWithColor("INFO", summaryColor("Summary: %d valid links, %d invalid links"), validCount, invalidCount)
-
-	if *failedOnly {
-		for _, result := range results {
-			if !result.IsValid {
-				logWithColor("ERROR", "Failed link: %s", result.Link)
-			}
-		}
-	} else if *verboseFlag {
-		for _, result := range results {
-			statusColor := color.GreenString
-			if !result.IsValid {
-				statusColor = color.RedString
-			}
-			logWithColor("INFO", "%s: %s", result.Link, statusColor("%d", result.StatusCode))
-		}
-	}
-
-	if invalidCount > 0 {
 		os.Exit(1)
 	}
 }
