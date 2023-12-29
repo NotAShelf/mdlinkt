@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fatih/color"
@@ -19,25 +20,32 @@ type LinkCheckResult struct {
 	StatusCode int
 }
 
+var wg sync.WaitGroup
+var verboseMode bool
+
 func logWithColor(level string, msg string, args ...interface{}) {
-	timestamp := time.Now().Format("2006/01/02 15:04:05")
-	colorFunc := color.New(color.FgWhite).SprintFunc()
-	switch level {
-	case "ERROR":
-		colorFunc = color.New(color.FgRed).SprintFunc()
-	case "WARN":
-		colorFunc = color.New(color.FgYellow).SprintFunc()
-	case "INFO":
-		colorFunc = color.New(color.FgCyan).SprintFunc()
+	if verboseMode {
+		timestamp := time.Now().Format("2006/01/02 15:04:05")
+		colorFunc := color.New(color.FgWhite).SprintFunc()
+		switch level {
+		case "ERROR":
+			colorFunc = color.New(color.FgRed).SprintFunc()
+		case "WARN":
+			colorFunc = color.New(color.FgYellow).SprintFunc()
+		case "INFO":
+			colorFunc = color.New(color.FgCyan).SprintFunc()
+		}
+		fmt.Printf("%s %s %s\n", timestamp, colorFunc(level), fmt.Sprintf(msg, args...))
 	}
-	fmt.Printf("%s %s %s\n", timestamp, colorFunc(level), fmt.Sprintf(msg, args...))
 }
 
 func main() {
 	filename := flag.String("file", "", "Markdown file to test")
-	verbose := flag.Bool("verbose", false, "Enable verbose mode")
+	verboseFlag := flag.Bool("verbose", false, "Enable verbose mode")
 	failedOnly := flag.Bool("failed-only", false, "Return only failed links")
 	flag.Parse()
+
+	verboseMode = *verboseFlag
 
 	if *filename == "" {
 		logWithColor("INFO", "Please provide a markdown file.")
@@ -63,37 +71,48 @@ func main() {
 	re := regexp.MustCompile(`\[(.*?)\]\((.*?)\)`)
 
 	results := []LinkCheckResult{}
+	resChan := make(chan LinkCheckResult, 1000) // buffered channel for storing responses
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		matches := re.FindAllStringSubmatch(line, -1)
 		for _, match := range matches {
-			link := strings.TrimSpace(match[2])
-			resp, err := http.Head(link)
-			if err != nil || resp == nil {
-				logWithColor("ERROR", "Invalid link: %s", link)
-				results = append(results, LinkCheckResult{
-					Link:       link,
-					IsValid:    false,
-					StatusCode: http.StatusBadRequest,
-				})
-			} else {
-				isValid := resp.StatusCode == http.StatusOK
-				result := LinkCheckResult{
-					Link:       link,
-					IsValid:    isValid,
-					StatusCode: resp.StatusCode,
-				}
-				results = append(results, result)
-				if *verbose || (!*failedOnly && !isValid) {
-					statusColor := color.GreenString
-					if !isValid {
-						statusColor = color.RedString
+			wg.Add(1)
+			go func(link string, verboseFlag *bool) {
+				defer wg.Done()
+				resp, err := http.Head(link)
+				if err != nil || resp == nil {
+					logWithColor("ERROR", "Invalid link: %s", link)
+					resChan <- LinkCheckResult{
+						Link:       link,
+						IsValid:    false,
+						StatusCode: http.StatusBadRequest,
 					}
-					logWithColor("INFO", "%s: %s", link, statusColor("%d", resp.StatusCode))
+				} else {
+					isValid := resp.StatusCode == http.StatusOK
+					result := LinkCheckResult{
+						Link:       link,
+						IsValid:    isValid,
+						StatusCode: resp.StatusCode,
+					}
+					resChan <- result
+					if *verboseFlag || (!*failedOnly && !isValid) {
+						statusColor := color.GreenString
+						if !isValid {
+							statusColor = color.RedString
+						}
+						logWithColor("INFO", "%s: %s", link, statusColor("%d", resp.StatusCode))
+					}
 				}
-			}
+			}(strings.TrimSpace(match[2]), verboseFlag)
 		}
+	}
+
+	wg.Wait()
+	close(resChan)
+
+	for res := range resChan {
+		results = append(results, res)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -101,7 +120,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Print summary
+	// summary
 	validCount := 0
 	invalidCount := 0
 	for _, result := range results {
@@ -115,6 +134,7 @@ func main() {
 	if invalidCount > 0 {
 		summaryColor = color.RedString
 	}
+
 	logWithColor("INFO", summaryColor("Summary: %d valid links, %d invalid links"), validCount, invalidCount)
 
 	if *failedOnly {
@@ -122,6 +142,14 @@ func main() {
 			if !result.IsValid {
 				logWithColor("ERROR", "Failed link: %s", result.Link)
 			}
+		}
+	} else if *verboseFlag {
+		for _, result := range results {
+			statusColor := color.GreenString
+			if !result.IsValid {
+				statusColor = color.RedString
+			}
+			logWithColor("INFO", "%s: %s", result.Link, statusColor("%d", result.StatusCode))
 		}
 	}
 
